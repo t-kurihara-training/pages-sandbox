@@ -1,0 +1,7 @@
+sphinxcontrib-plantuml
+sphinxcontrib-actdiag
+sphinxcontrib-blockdiag
+sphinxcontrib-nwdiag
+sphinxcontrib-seqdiag
+myst-parser
+sphinx-markdown-tables
