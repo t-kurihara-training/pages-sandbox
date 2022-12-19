@@ -1,42 +1,111 @@
-# Simple workflow for deploying static content to GitHub Pages
-name: Deploy static content to Pages
+name: Build and Publish Documents
 
 on:
-  # Runs on pushes targeting the default branch
   push:
-    branches: ["main"]
-
-  # Allows you to run this workflow manually from the Actions tab
+    branches-ignore: [gh-pages]
+    paths:
+      - 'docs/**'
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-# Allow one concurrent deployment
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
 jobs:
-  # Single deploy job since we're just deploying
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+  build:
+    runs-on: [self-hosted]
+    container:
+      image: python:3
+
+    permissions:
+      contents: write
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Setup Pages
-        uses: actions/configure-pages@v2
+      - uses: actions/checkout@v2
+
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt update ; apt install -y -qq plantuml fonts-ipafont
+          pip install --no-cache-dir -r requirements.txt
+        working-directory: docs
+
+      - name: Build
+        run: |
+          make html
+        working-directory: docs
+
+      - name: Merge
+        run: |
+          destdir="output"
+          curdir="docs/_build/html"
+          curbranch="${{ github.ref_name }}"
+          rbranch="origin/gh-pages"
+          echo "fetch ${rbranch%%/*}"
+          git fetch --prune --depth=1 ${rbranch%%/*}
+          alive=""
+          for branch in $(git branch -r --format '%(refname:lstrip=3)' | egrep -v 'gh-pages|HEAD'); do
+            echo "branch=${branch}"
+            alive="${alive}|${branch}"
+          done
+          alive="${alive#|}"
+          echo "alive ${alive}"
+          echo "cleanup destdir"
+          rm -rf ${destdir}
+          mkdir -p ${destdir}
+          echo "extract rbranch to ${destdir}"
+          git archive "${rbranch}" --prefix "${destdir}/" | tar xf - || true
+          echo "remove deleted branch"
+          for i in $(ls -1 "${destdir}" | egrep -vx "${alive}"); do
+            echo "remove ${i}"
+            rm -rf "${destdir}/${i}"
+          done
+          echo "remove old build"
+          rm -rf "${destdir}/${curbranch}"
+          echo "copy new contents"
+          cp -r "${curdir}/" "${destdir}/${curbranch}/"
+          echo "create index"
+          (
+            echo "<html><body><ul>"
+            for i in $(ls -1 "${destdir}"); do
+              [ -d "${destdir}/${i}" ] || continue
+              echo "<li><a href=\""$i"\">"$i"</li>"
+            done
+            echo "</ul></body></html>"
+          ) > "${destdir}/index.html"
+          
+      # - name: Get repository name
+      #   run: |
+      #     echo "REPO_NAME=${GITHUB_REPOSITORY#${GITHUB_REPOSITORY_OWNER}/}" >> $GITHUB_ENV
+
+      # - name: Deploy Pages
+      #   uses: peaceiris/actions-gh-pages@068dc23d9710f1ba62e86896f84735d869951305
+      #   with:
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
+      #     publish_dir: ./output
+      #     cname: ${{ env.REPO_NAME }}.p2-gen2-dev.iij.jp
+
+      # - name: Enable Pages
+      #   uses: actions/configure-pages@v2
+      # -> Enabled (and Set CNAME) by Terraform
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
         with:
-          # Upload entire repository
-          path: '.'
+          path: './output'
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted]
+    container:
+      image: python:3
+
+    permissions:
+      pages: write
+      id-token: write      
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v1
